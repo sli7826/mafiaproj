@@ -33,64 +33,87 @@ var gameTime=0;
 var night = false;
 const prefix = 'm.';
 var killed;
-client.on('message', message => {
+client.on('message', message => 
+          {
   if (message.author === client.user) return;
-  if (message.content.startsWith(prefix + 'ping')) {
+  if (message.content.startsWith(prefix + 'ping')) 
+  {
     message.channel.send('pong');
   }
-  if (message.content.startsWith(prefix + 'play')) {
+  if (message.content.startsWith(prefix + 'play')&&!gameStarted) 
+  {
     var server = message.guild;
     var name = message.author;
-    if(!gameStarted){
-      x.push(name);
-      voteCounts.push(0);
-      if(client.channels.find("name","mafia")==null){
-        server.createChannel('mafia', 'text', [{
-            id: server.id,
-            deny: ['MANAGE_MESSAGES','CREATE_INSTANT_INVITE','MANAGE_CHANNELS','SEND_MESSAGES','SEND_TTS_MESSAGES','MANAGE_MESSAGES','EMBED_LINKS','ATTACH_FILES','MANAGE_ROLES','MANAGE_WEBHOOKS','USE_EXTERNAL_EMOJIS','MENTION_EVERYONE'],
-            allow: ['ADD_REACTIONS','VIEW_CHANNEL','READ_MESSAGE_HISTORY']
-          },{
-            id: name,
-            deny: ['MANAGE_MESSAGES','CREATE_INSTANT_INVITE','MANAGE_CHANNELS','SEND_MESSAGES','SEND_TTS_MESSAGES','MANAGE_MESSAGES','EMBED_LINKS','ATTACH_FILES','MANAGE_ROLES','MANAGE_WEBHOOKS','USE_EXTERNAL_EMOJIS','MENTION_EVERYONE'],
-            allow: ['ADD_REACTIONS','VIEW_CHANNEL','READ_MESSAGE_HISTORY','SEND_MESSAGES','EMBED_LINKS','ATTACH_FILES','USE_EXTERNAL_EMOJIS']
-        }]);
-        server.createChannel('mafiaVC', 'voice', [{
-            id: server.id,
-            deny: ['CREATE_INSTANT_INVITE','MANAGE_CHANNELS','SPEAK','MUTE_MEMBERS','DEAFEN_MEMBERS','MOVE_MEMBERS','USE_VAD','MANAGE_ROLES','MANAGE_WEBHOOKS'],
-            allow: ['VIEW_CHANNEL','CONNECT']
-          },{
-            id: name,
-            deny: ['CREATE_INSTANT_INVITE','MANAGE_CHANNELS','SPEAK','MUTE_MEMBERS','DEAFEN_MEMBERS','MOVE_MEMBERS','USE_VAD','MANAGE_ROLES','MANAGE_WEBHOOKS'],
-            allow: ['VIEW_CHANNEL','CONNECT','SPEAK','USE_VAD']
-        }]);
-        message.channel.send(name+" has join the game, waiting for more players...");
-      }else{
-        client.channels.find("name","mafia").overwritePermissions(name,{
-            SEND_MESSAGES:true,
-            EMBED_LINKS:true,
-            ATTACH_FILES:true,
-            USE_EXTERNAL_EMOJIS:true,
-            ADD_REACTIONS:true
-          });
-        client.channels.find("name","mafiaVC").overwritePermissions(name,{
-            SPEAK:true,
-            USE_VAD:true
-          });
-        message.channel.send(name+" has join the game, waiting for more players...");
+      if(x.indexOf(name) == -1)
+      {
+        x.push(name);
+        voteCounts.push(0);
+
+
+
+        if(client.channels.find("name","mafia")==null)
+        {
+          server.createChannel('mafia', 'text', [
+            {
+              id: server.id,
+              deny: ['MANAGE_MESSAGES','CREATE_INSTANT_INVITE','MANAGE_CHANNELS','SEND_MESSAGES','SEND_TTS_MESSAGES','MANAGE_MESSAGES','EMBED_LINKS','ATTACH_FILES','MANAGE_ROLES','MANAGE_WEBHOOKS','USE_EXTERNAL_EMOJIS','MENTION_EVERYONE'],
+              allow: ['ADD_REACTIONS','VIEW_CHANNEL','READ_MESSAGE_HISTORY']
+            },
+            {
+              id: name,
+              deny: ['MANAGE_MESSAGES','CREATE_INSTANT_INVITE','MANAGE_CHANNELS','SEND_MESSAGES','SEND_TTS_MESSAGES','MANAGE_MESSAGES','EMBED_LINKS','ATTACH_FILES','MANAGE_ROLES','MANAGE_WEBHOOKS','USE_EXTERNAL_EMOJIS','MENTION_EVERYONE'],
+              allow: ['ADD_REACTIONS','VIEW_CHANNEL','READ_MESSAGE_HISTORY','SEND_MESSAGES','EMBED_LINKS','ATTACH_FILES','USE_EXTERNAL_EMOJIS']
+          }]);
+          server.createChannel('mafiaVC', 'voice', [
+            {
+              id: server.id,
+              deny: ['CREATE_INSTANT_INVITE','MANAGE_CHANNELS','SPEAK','MUTE_MEMBERS','DEAFEN_MEMBERS','MOVE_MEMBERS','USE_VAD','MANAGE_ROLES','MANAGE_WEBHOOKS'],
+              allow: ['VIEW_CHANNEL','CONNECT']
+            },
+            {
+              id: name,
+              deny: ['CREATE_INSTANT_INVITE','MANAGE_CHANNELS','SPEAK','MUTE_MEMBERS','DEAFEN_MEMBERS','MOVE_MEMBERS','USE_VAD','MANAGE_ROLES','MANAGE_WEBHOOKS'],
+              allow: ['VIEW_CHANNEL','CONNECT','SPEAK','USE_VAD']
+          }]);
+          message.channel.send(name+" has join the game, waiting for more players...");
+        }
+        else
+        {
+          client.channels.find("name","mafia").overwritePermissions(name,{
+              SEND_MESSAGES:true,
+              EMBED_LINKS:true,
+              ATTACH_FILES:true,
+              USE_EXTERNAL_EMOJIS:true,
+              ADD_REACTIONS:true
+            });
+          client.channels.find("name","mafiaVC").overwritePermissions(name,{
+              SPEAK:true,
+              USE_VAD:true
+            });
+          message.channel.send(name+" has join the game, waiting for more players...");
+        }
+
+
       }
-      if(x.length>=3){
+      
+      
+      if(x.length>=3)
+      {
         message.channel.send("Players done, Time till game closed: 10 seconds");
         setTimeout(function(){ client.channels.find("name","mafia").send("Game Closed : Players in game "+ x.join() );
                                client.channels.find("name","mafia").send("You have 3 mins to discuss before night falls.\n Use m.check to see which number corresponds to which player and use m.vote <playerNumber> to vote for them.");
                                gameStarted=true;
                               mafia=x[getRandomInt(x.length)];
                               mafia.send("You are the mafia! You will have one kill at night.");
-                              for(var i in x){
+                              for(var i in x)
+                              {
                                 if(x[i]!=mafia)
                                   x[i].send("You are a villager and your goal is to find the mafia before they kill you.");
                               }
                              }, 10000);
-        var timeController=setInterval(function(){
+        
+        var timeController=setInterval(function()
+        {
           gameTime++;
           if(gameTime>11){
             if(gameTime==180){
@@ -157,7 +180,6 @@ client.on('message', message => {
         },1000);
         
       }
-    }
   }
   
   if (message.content.startsWith(prefix + 'delete')) {
