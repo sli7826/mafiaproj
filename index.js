@@ -45,16 +45,22 @@ setInterval(() =>
 var db = new Datastore({ filename: '.data/datafile', autoload: true });
 const client = new Discord.Client();
 
+var currentGuildVars=null;
+var currentServer=null;
+var serversObj=[];
+var serversList=[];
 var waitingPlayersList=[];
 var playerList=[];
-var mafiaChannel;
+var mafiaChannel=null;
 var gameState=-1;
 var gameTime=0;
 var logicGameTime=0;
 var defensePlayer=null;
 var guiltCount=0;
 var timeController=null;
-var findChannelString;
+var findChannelString=null;
+var numPlayers = 2;
+var testTimer = null;
 
 
 /*Role constants + prefix constant*/
@@ -62,13 +68,18 @@ const MAFIA = 0;
 const DETECTIVE = 1;
 const TOWN = 2;
 const DOCTOR = 3;
+const NOGAME = -1;
 const DAY = 0;
 const NIGHT = 1;
 const DEFENSE = 2;
 const VOTING = 3;
 const GAMESTARTING = 4;
-const NOGAME = -1;
 const ENDGAME = 5;
+
+const DAYLENGTH = 180;
+const NIGHTLENGTH = 60;
+const DEFENSELENGTH = 30;
+const VOTINGLENGTH = 30;
 
 const prefix = 'm.';
 
@@ -80,10 +91,54 @@ function getRandomInt(max)
   return Math.floor(Math.random() * Math.floor(max));
 }
 
-function checkPlayersDeadOrAlive(player)
+//makes vars into objs
+function ServerObj(id)
 {
-  return player.alive;
-  
+  return {
+    id: id,
+    waitingPlayersList: waitingPlayersList,
+    playerList: playerList,
+    mafiaChannel: mafiaChannel,
+    gameState: gameState,
+    gameTime: gameTime,
+    logicGameTime: logicGameTime,
+    defensePlayer: defensePlayer,
+    guiltCount: guiltCount,
+    timeController: timeController,
+    findChannelString: findChannelString,
+    currentServer: currentServer,
+    testTimer: testTimer
+  };
+}
+
+//update the data
+function updateData(id,varName,amt)
+{
+  var found = false;
+  db.find({ _id: id }, function (err, docs) {
+    if(docs.length==0)
+      found=true;
+  });
+  if(found){
+    var foundData;
+    db.find({ _id: id }, function (err, docs) {
+    if(docs.length==0)
+      foundData=docs;
+    });
+    foundData[0][varName]=amt;
+  }
+}
+
+//converts the given amount of seconds to minutes and seconds.
+function convertSecToMinSec(sec)
+{
+  if(sec < 60)
+  {
+    return sec + " sec";
+  }
+  var minutes = sec % 60;
+  sec -= minutes * 60;
+  return minutes + " min and " + sec + " sec";
 }
 
 //given a array and a item. Put the item in a random position in the array.
@@ -100,14 +155,14 @@ function placeItemRandomlyInArray(array, item)
   }
 }
 
-//given a string of a name returns the player obj with that name. Return null if player isn't found.
-function findPlayerWithName(name)
+//given a string of a id returns the player obj with that name. Return null if player isn't found.
+function findPlayerWithId(id)
 {
-  for(var i = 0; i < playerList.length; i++)
+  for(var i = 0; i < currentGuildVars.playerList.length; i++)
   {
-    if(playerList[i].name.username == name)
+    if(currentGuildVars.playerList[i].name.id == id)
     {
-      return playerList[i];
+      return currentGuildVars.playerList[i];
     }
   }
   return null;
@@ -130,9 +185,13 @@ function findPlayerWithName(name)
 //send instrictions on the commands
 function sendInstructions(name)
 {
-  name.send("Game Commands: ");
-  name.send("m.play - join a game");
-  name.send("m.quit - quit the game");
+  var tempText = "Game Commands: \n" 
+  + "m.play - join a game \n"
+  + "m.quit - quit the game \n"
+  + "m.check - checks the players playing the game (only useable ingame) \n"
+  + "m.getrules - send instructions to user via pm \n"
+  + "m.time - gets the current time (only useable ingame) \n";
+  name.send(tempText);
 }
 
 //assigns roles to players and adds Player objects to the playerList array (players come from the waitingPlayersList array
@@ -184,11 +243,11 @@ function assignRoles()
 //   }
   var numOfDoc = 1;
   var numOfDete = 1;
-  var numOfMafia = Math.floor((waitingPlayersList.length - 2) / 3);
+  var numOfMafia = Math.floor((currentGuildVars.waitingPlayersList.length - 2) / 3);
   if(numOfMafia < 2)
     numOfDoc = 0;
   //Other options for less then 5 players
-  if(waitingPlayersList.length < 5)
+  if(currentGuildVars.waitingPlayersList.length < 5)
   {
     numOfMafia = 1;
     numOfDoc = 0;
@@ -197,7 +256,7 @@ function assignRoles()
   
   
   var indexes = [];
-  for(var i = 0; i < waitingPlayersList.length; i++)
+  for(var i = 0; i < currentGuildVars.waitingPlayersList.length; i++)
   {
     indexes.push(i);
   }
@@ -206,7 +265,7 @@ function assignRoles()
   {
     var randNum = getRandomInt(indexes.length);
     //console.log("before:\n"+waitingPlayersList[0]);
-    placeItemRandomlyInArray(playerList, new Player(waitingPlayersList[indexes[randNum]], DOCTOR));
+    placeItemRandomlyInArray(currentGuildVars.playerList, new Player(currentGuildVars.waitingPlayersList[indexes[randNum]], DOCTOR));
     indexes.splice(randNum, 1);
     
     //console.log(playerList[playerList.length-1]);
@@ -218,7 +277,7 @@ function assignRoles()
     //something like?
     var randNum = getRandomInt(indexes.length);
     //console.log("before:\n"+waitingPlayersList[0]);//undefined
-    placeItemRandomlyInArray(playerList, new Player(waitingPlayersList[indexes[randNum]], DETECTIVE));
+    placeItemRandomlyInArray(currentGuildVars.playerList, new Player(currentGuildVars.waitingPlayersList[indexes[randNum]], DETECTIVE));
     indexes.splice(randNum, 1);
     //console.log(playerList[playerList.length-1]);
     numOfDete--;
@@ -226,7 +285,7 @@ function assignRoles()
   while(numOfMafia >= 1)
   {
     var randNum = getRandomInt(indexes.length);
-    placeItemRandomlyInArray(playerList, new Player(waitingPlayersList[indexes[randNum]], MAFIA));
+    placeItemRandomlyInArray(currentGuildVars.playerList, new Player(currentGuildVars.waitingPlayersList[indexes[randNum]], MAFIA));
     indexes.splice(randNum, 1);
     //console.log(playerList[playerList.length-1]);
     numOfMafia--;
@@ -234,25 +293,24 @@ function assignRoles()
   while(indexes.length > 0)
   {
     var randNum = getRandomInt(indexes.length);
-    placeItemRandomlyInArray(playerList, new Player(waitingPlayersList[indexes[randNum]], TOWN));
+    placeItemRandomlyInArray(currentGuildVars.playerList, new Player(currentGuildVars.waitingPlayersList[indexes[randNum]], TOWN));
     indexes.splice(randNum, 1);
     //console.log(playerList[playerList.length-1]);
   }
 }
 
-
-
+//checks to see if the game has ended or not. return true for yes, false for no.
 function checkWin()
 {
   var aliveMafia = 0;
   var aliveInnocent = 0;
-  for(var i = 0; i < playerList.length; i++)
+  for(var i = 0; i < currentGuildVars.playerList.length; i++)
   {
-    if(playerList[i].role == MAFIA && playerList[i].alive)
+    if(currentGuildVars.playerList[i].role == MAFIA && currentGuildVars.playerList[i].alive)
     {
       aliveMafia++;
     }
-    if(playerList[i].role != MAFIA && playerList[i].alive)
+    if(currentGuildVars.playerList[i].role != MAFIA && currentGuildVars.playerList[i].alive)
     {
       aliveInnocent++;
     }
@@ -260,15 +318,15 @@ function checkWin()
   if(aliveMafia == 0)
   {
     //innocent wins.
-    mafiaChannel.send("Dun Dun Dun. Town Wins!");
-    mafiaChannel.send("Number Of Mafia Left: " + aliveMafia + " Number Of Town Left: " + aliveInnocent);
+    currentGuildVars.mafiaChannel.send("Town Wins!");
+    currentGuildVars.mafiaChannel.send("Number Of Mafia Left: " + aliveMafia + " Number Of Town Left: " + aliveInnocent);
     return true;
   }
   if(aliveMafia >= aliveInnocent)
   {
     //mafia wins.
-    mafiaChannel.send("Dun Dun Dun. Maifa Wins!");
-    mafiaChannel.send("Number Of Mafia Left: " + aliveMafia + " Number Of Town Left: " + aliveInnocent);
+    currentGuildVars.mafiaChannel.send("Maifa Wins!");
+    currentGuildVars.mafiaChannel.send("Number Of Mafia Left: " + aliveMafia + " Number Of Town Left: " + aliveInnocent);
     return true;
   }
   return false;
@@ -278,11 +336,12 @@ function checkWin()
 function getAllMafiaPlayers()
 {
   var mafiaP = [];
-  for(var i = 0; i < playerList.length; i++)
+  for(var i = 0; i < currentGuildVars.playerList.length; i++)
   {
-    if(playerList[i].role == MAFIA && playerList[i].alive)
+    var tempCurrentPlayer = currentGuildVars.playerList[i];
+    if(tempCurrentPlayer.role == MAFIA && tempCurrentPlayer.alive)
     {
-      mafiaP.push(playerList[i]);
+      mafiaP.push(tempCurrentPlayer);
     }
   }
   return mafiaP;
@@ -292,11 +351,11 @@ function getAllMafiaPlayers()
 function getAllAlivePlayers()
 {
   var mafiaP = [];
-  for(var i = 0; i < playerList.length; i++)
+  for(var i = 0; i < currentGuildVars.playerList.length; i++)
   {
-    if(playerList[i].alive)
+    if(currentGuildVars.playerList[i].alive)
     {
-      mafiaP.push(playerList[i]);
+      mafiaP.push(currentGuildVars.playerList[i]);
     }
   }
   return mafiaP;
@@ -306,11 +365,11 @@ function getAllAlivePlayers()
 function getAllMafiaPlayersNames()
 {
   var mafiaP = [];
-  for(var i = 0; i < playerList.length; i++)
+  for(var i = 0; i < currentGuildVars.playerList.length; i++)
   {
-    if(playerList[i].role == MAFIA && playerList[i].alive)
+    if(currentGuildVars.playerList[i].role == MAFIA && currentGuildVars.playerList[i].alive)
     {
-      mafiaP.push(playerList[i].name);
+      mafiaP.push(currentGuildVars.playerList[i].name);
     }
   }
   return mafiaP;
@@ -319,9 +378,9 @@ function getAllMafiaPlayersNames()
 function getMafiaCount()
 {
   var count = 0;
-  for(var i = 0; i < playerList.length; i++)
+  for(var i = 0; i < currentGuildVars.playerList.length; i++)
   {
-    if(playerList[i].role == MAFIA && playerList[i].alive)
+    if(currentGuildVars.playerList[i].role == MAFIA && currentGuildVars.playerList[i].alive)
     {
       count++;
     }
@@ -332,13 +391,16 @@ function getMafiaCount()
 //returns the player object of the person whose name is the parameter passed in.
 function getPlayerOf(name)
 {
-  for(var i = 0; i < playerList.length; i++)
+  if(currentGuildVars != null)
   {
-    if(playerList[i].name == name)
+    for(var i = 0; i < currentGuildVars.playerList.length; i++)
     {
-      return playerList[i];
-    }
-  } 
+      if(currentGuildVars.playerList[i].name == name)
+      {
+        return currentGuildVars.playerList[i];
+      }
+    } 
+  }
   return null;
 }
 
@@ -349,9 +411,9 @@ function getKilledPlayer()
 {
   //This is the list of players that has been voted to kill.
   var listOfPlayersVoted = [];
-  for(var i = 0; i < playerList.length; i++)
+  for(var i = 0; i < currentGuildVars.playerList.length; i++)
   {
-    var currPlayer = playerList[i];
+    var currPlayer = currentGuildVars.playerList[i];
     //if the current player is alive and is a mafia. find out who the mafia voted.
     if(currPlayer.alive && currPlayer.role == MAFIA)
     {
@@ -374,19 +436,32 @@ function getKilledPlayer()
 //If the doctor didn't heal anyone return null.
 function getHealedPlayer()
 {
-  for(var i = 0; i < playerList.length; i++)
+  for(var i = 0; i < currentGuildVars.playerList.length; i++)
   {
-    if(playerList[i].alive && playerList[i].role == DOCTOR)
+    if(currentGuildVars.playerList[i].alive && currentGuildVars.playerList[i].role == DOCTOR)
     {
-      if(playerList[i].healed == null)
+      if(currentGuildVars.playerList[i].healed == null)
       {
-        playerList[i].healedLastRound = null;
+        currentGuildVars.playerList[i].healedLastRound = null;
         return null;
       }
-      var healedPerson = playerList[i].healed;
-      playerList[i].healedLastRound = healedPerson;
-      playerList[i].healed = null;
+      var healedPerson = currentGuildVars.playerList[i].healed;
+      currentGuildVars.playerList[i].healedLastRound = healedPerson;
+      currentGuildVars.playerList[i].healed = null;
       return healedPerson;
+    }
+  }
+  return null;
+}
+
+//returns the doctor if there is one.
+function getDoctor()
+{
+  for(var i = 0; i < currentGuildVars.playerList.length; i++)
+  {
+    if(currentGuildVars.playerList[i].alive && currentGuildVars.playerList[i].role == DOCTOR)
+    {
+      return currentGuildVars.playerList[i];
     }
   }
   return null;
@@ -396,66 +471,81 @@ function getHealedPlayer()
 //return null if no one was investigated.
 function tellTheDetectiveWhoHeSearched()
 {
-  for(var i = 0; i < playerList.length; i++)
+  for(var i = 0; i < currentGuildVars.playerList.length; i++)
   {
-    if(playerList[i].alive && playerList[i].role == DETECTIVE)
+    if(currentGuildVars.playerList[i].alive && currentGuildVars.playerList[i].role == DETECTIVE)
     {
-      var investigatedPlayer = playerList[i].searched;
-      playerList[i].searched = null;
+      var investigatedPlayer = currentGuildVars.playerList[i].searched;
+      currentGuildVars.playerList[i].searched = null;
       if(investigatedPlayer != null)
       {
         if(investigatedPlayer.role == MAFIA)
-          playerList[i].name.send("The person you investigated was a mafia.");
+          currentGuildVars.playerList[i].name.send("The person you investigated was a mafia.");
         else
-          playerList[i].name.send("The person you investigated was not a mafia.");
+          currentGuildVars.playerList[i].name.send("The person you investigated was not a mafia.");
       }
     }
   }
 }
 
+//resets all variables to their default.
 function resetVariables()
 {
-  waitingPlayersList=[];
-  playerList=[];
-  if(mafiaChannel != null)
-    mafiaChannel.delete();
-    mafiaChannel = null;
-    gameState=-1;
-    gameTime=0;
-    logicGameTime=0;
-    defensePlayer=null;
-    guiltCount=0;
-  if(timeController != null)
+  currentGuildVars.waitingPlayersList=[];
+  currentGuildVars.playerList=[];
+  currentGuildVars.currentServer = null;
+  if(currentGuildVars.mafiaChannel != null)
+    currentGuildVars.mafiaChannel.delete();
+    currentGuildVars.mafiaChannel = null;
+    currentGuildVars.gameState=-1;
+    currentGuildVars.gameTime=0;
+    currentGuildVars.logicGameTime=0;
+    currentGuildVars.defensePlayer=null;
+    currentGuildVars.guiltCount=0;
+    currentGuildVars.findChannelString="mafia";
+  if(currentGuildVars.timeController != null)
   {
-    clearTimeout(timeController);
-    timeController = null;
+    clearTimeout(currentGuildVars.timeController);
+    currentGuildVars.timeController = null;
   }
 }
 
 function sendNightInstructions()
 {
-  for(var i = 0; i < playerList.length; i++)
+  for(var i = 0; i < currentGuildVars.playerList.length; i++)
   {
-    if(playerList[i].alive)
+    if(currentGuildVars.playerList[i].alive)
     {
-      if(playerList[i].role == MAFIA)
+      if(currentGuildVars.playerList[i].role == MAFIA)
       {
-        playerList[i].name.send("You are allowed to kill one player. \n Use m.check to check player numbers. \n Use m.kill {their number} to vote kill someone");
+        currentGuildVars.playerList[i].name.send("You are allowed to kill one player. \n Use m.check to check player numbers. \n Use m.kill {their number} to vote kill someone");
       }
-      if(playerList[i].role == DETECTIVE)
+      if(currentGuildVars.playerList[i].role == DETECTIVE)
       {
-        playerList[i].name.send("You can investigate one player at night. \n Use m.check to check player numbers. \n Use m.investigate {their number} to investigate someone. \n In the morning you will get your result");
+        currentGuildVars.playerList[i].name.send("You can investigate one player at night. \n Use m.check to check player numbers. \n Use m.investigate {their number} to investigate someone. \n In the morning you will get your result");
       }
-      if(playerList[i].role == DOCTOR)
+      if(currentGuildVars.playerList[i].role == DOCTOR)
       {
-        playerList[i].name.send("You can heal one player at night. \n Use m.check to check player numbers. \n Use m.heal {their number} to heal someone.");
+        currentGuildVars.playerList[i].name.send("You can heal one player at night. \n Use m.check to check player numbers. \n Use m.heal {their number} to heal someone.");
       }
-      if(playerList[i].role == TOWN)
+      if(currentGuildVars.playerList[i].role == TOWN)
       {
-        playerList[i].name.send("It is night. Stay safe until morning");
+        currentGuildVars.playerList[i].name.send("It is night. Stay safe until morning");
       }
     }
   }
+}
+
+//send instructions in a pm to the user provided.
+function sendHowToPlayInstructions(name)
+{
+  var instructionText = "";
+  instructionText += "Hello " + name.username + "! Welcome to the game of Mafia. \n";
+  instructionText += "Overview: \n In Mafia there are two groups of people, the mafia(s) and the innocents. At the beginning of the game you are assigned a role (your role will be sent to you by private message from me "
+  + client.user.username + ". If you're a mafia your goal is to kill non-mafias until there is only the same amount of mafias as non-mafias (Ex. if there are 2 mafias, your goal is to kill until there are only 2 non-mafias left to win)."
+  + " If you a non-mafia your goal is to kill all mafias. \n";
+  instructionText += "";
+  name.send(instructionText);
 }
 
 /*Objects*/
@@ -492,6 +582,18 @@ client.on('message', message =>
   var name = message.author;
   //when the game starts currentPlayer is retrieved from the list of players.
   var currentPlayer = getPlayerOf(name);
+  if(currentPlayer != null && message.channel.type == "dm")
+    server = currentPlayer.currentServer;
+  if(serversList.indexOf(server)>-1){
+    currentGuildVars=serversObj[serversList.indexOf(server)];
+  }else{
+    serversList.push(server);
+    serversObj.push(new ServerObj(server));
+    currentGuildVars=serversObj[serversList.indexOf(server)];
+    resetVariables();
+  }
+  
+  
   //ignore bot's own messages
   if (name === client.user) return;
   
@@ -499,6 +601,8 @@ client.on('message', message =>
   if (message.content.startsWith(prefix + 'ping')) 
   {
     message.channel.send('pong');
+    console.log(currentGuildVars.id.name);
+    console.log(currentGuildVars.timeController);
   }
   
   if (message.content.startsWith(prefix + 'help')) 
@@ -508,22 +612,85 @@ client.on('message', message =>
   
   if (message.content.startsWith(prefix + 'quit'))
   {
-    if(gameState!=NOGAME)
+    if(message.channel.type == "text")
     {
-      //if the game started and someone wants to quit run this code.
-      message.channel.send("too bad " + name + " you can't quit the game.");
-    }
-    else
-    {
-      if(waitingPlayersList.indexOf(name) > -1)
+      if(currentGuildVars.gameState!=NOGAME)
       {
-        waitingPlayersList.splice(waitingPlayersList.indexOf(name), 1);
-        message.channel.send(name+" has left the queue. Currently "+waitingPlayersList.length+" players in queue and need a minimum of 5 to start.");
+        //if the game started and someone wants to quit run this code.
+        message.channel.send("too bad " + name + " you can't quit the game.");
       }
       else
       {
-        message.channel.send("You are not on the player list");
+        if(currentGuildVars.waitingPlayersList.indexOf(name) > -1)
+        {
+          currentGuildVars.waitingPlayersList.splice(currentGuildVars.waitingPlayersList.indexOf(name), 1);
+          message.channel.send(name+" has left the queue. Currently "+currentGuildVars.waitingPlayersList.length+" players in queue and need a minimum of 5 to start.");
+        }
+        else
+        {
+          message.channel.send("You are not on the player list");
+        }
       }
+    }
+    else
+    {
+      message.channel.send("You cannot use this command outside of a guild's chat channel");
+    }
+  }
+  
+  if(message.content.startsWith(prefix + 'getrules'))
+  {
+    sendHowToPlayInstructions(name);
+    if(message.channel.type == "text")
+      message.channel.send("Instruction sent to " + name + ". Please check your private message.");
+  }
+  
+  //gets the current time in the game.
+  if(message.content.startsWith(prefix + 'time') && currentGuildVars.gameState != NOGAME && currentPlayer != null && currentPlayer.alive)
+  {
+    var timeUntilItEnds = "";
+    var currentSetting = "";
+    if(currentGuildVars.gameState == DAY)
+    {
+      timeUntilItEnds = convertSecToMinSec(DAYLENGTH - currentGuildVars.logicGameTime);
+      currentSetting = "day";
+    }
+    if(currentGuildVars.gameState == NIGHT)
+    {
+      timeUntilItEnds = convertSecToMinSec(NIGHTLENGTH - currentGuildVars.logicGameTime);
+      currentSetting = "night";
+    }
+    if(currentGuildVars.gameState == DEFENSE)
+    {
+      timeUntilItEnds = convertSecToMinSec(DEFENSELENGTH - currentGuildVars.logicGameTime);
+      currentSetting = "player defense";
+    }
+    if(currentGuildVars.gameState == VOTING)
+    {
+      timeUntilItEnds = convertSecToMinSec(VOTINGLENGTH - currentGuildVars.logicGameTime);
+      currentSetting = "voting";
+    }
+    message.channel.send(timeUntilItEnds + " remaining until " + currentSetting + "ends.");
+  }
+  
+  //able to increase the time or decrease it.
+  if(message.content.startsWith(prefix + 'timemagic') && currentGuildVars.gameState != NOGAME && currentPlayer != null && currentPlayer.alive)
+  {
+    var inputNum = parseInt(message.content.split(" ")[1]);
+    //checks to see if there is a error from the players input.
+    if(!isNaN(searchNum) && searchNum >= 0 && searchNum <= currentGuildVars.playerList.length - 1)
+    {
+      if(inputNum < -20)
+        inputNum = -20;
+      if(inputNum > 30)
+        inputNum = 30;
+      currentGuildVars.logicGameTime -= inputNum;
+      if(currentGuildVars.logicGameTime < 0)
+        currentGuildVars.logicGameTime = 0;
+      if(inputNum > 0)
+        currentGuildVars.mafiaChannel.send(currentPlayer.name + "used time magic to remove " + inputNum + " sec from the clock.");
+      else if(inputNum < 0)
+        currentGuildVars.mafiaChannel.send(currentPlayer.name + "used time magic to add " + inputNum + " sec to the clock." );
     }
   }
   
@@ -533,183 +700,219 @@ client.on('message', message =>
     resetVariables(); 
   }
   
-  if ((gameState==GAMESTARTING||gameState==NOGAME)&&message.content.startsWith(prefix + 'play')) 
+  if ((currentGuildVars.gameState==GAMESTARTING||currentGuildVars.gameState==NOGAME)&&message.content.startsWith(prefix + 'play')) 
   {
-   
-      if(waitingPlayersList.indexOf(name) == -1)//check to see if the user is already playing
+    if(message.channel.type == "text")
+    {
+      if(currentGuildVars.waitingPlayersList.indexOf(name) == -1)//check to see if the user is already playing
       {
-        waitingPlayersList.push(name);//add user to the waitingList
-        message.channel.send(name+" has joined the queue. Currently "+waitingPlayersList.length+" players in queue and need a minimum of 5 to start.");
+        currentGuildVars.waitingPlayersList.push(name);//add user to the waitingList
+        message.channel.send(name+" has joined the queue. Currently "+currentGuildVars.waitingPlayersList.length+" players in queue and need a minimum of "+numPlayers+" to start.");
       }
+    }
+    else
+    {
+      message.channel.send("You cannot use this command outside of a guild's chat channel");
+    }
       
       
       //met player requirments and game isnt already starting
-      if(waitingPlayersList.length>=3 && gameState==NOGAME)
+      if(currentGuildVars.waitingPlayersList.length>=numPlayers && currentGuildVars.gameState==NOGAME)
       {
-        gameState = GAMESTARTING;
+        currentGuildVars.gameState = GAMESTARTING;
         message.channel.send("Enough players have joined the match. You have 10 seconds to join before the ability to join is closed off.");
         //channel creation
-        findChannelString="mafia";
+        currentGuildVars.findChannelString="mafia";
         var serverNum=1;
-        /*while(client.channels.find("name",findChannelString)!=null)
+        
+        //uncommented for testing. Channel name changer.
+        while(server.channels.find("name",currentGuildVars.findChannelString)!=null)
         {
-          findChannelString = "mafia " + serverNum;
+          currentGuildVars.findChannelString = "mafia-" + serverNum;
           serverNum++;
-        }*/
-        server.createChannel(findChannelString, 'text', [
+        }
+        
+        server.createChannel(currentGuildVars.findChannelString, 'text', [
         {//define channel permissions
           id: server.id,
           deny: ['MANAGE_MESSAGES','CREATE_INSTANT_INVITE','MANAGE_CHANNELS','SEND_MESSAGES','MANAGE_MESSAGES','MANAGE_ROLES','MANAGE_WEBHOOKS','MENTION_EVERYONE'],
           allow: ['ADD_REACTIONS','VIEW_CHANNEL','READ_MESSAGE_HISTORY','EMBED_LINKS','ATTACH_FILES','SEND_TTS_MESSAGES','USE_EXTERNAL_EMOJIS']
         }]);
-        timeController=setInterval(function()
+        currentGuildVars.timeController=setInterval(function()
         {
           //increments gameTime evry second
-          gameTime++;
-          logicGameTime++;
+          currentGuildVars.gameTime++;
+          currentGuildVars.logicGameTime++;
           //checks for first 10 seconds and game isnt started
-          if(gameTime>=10&&gameState==GAMESTARTING){
-            gameState=DAY; 
-            mafiaChannel = client.channels.find("name",findChannelString);
+          if(currentGuildVars.gameTime>=10&&currentGuildVars.gameState==GAMESTARTING){
+            currentGuildVars.gameState=DAY; 
+            currentGuildVars.mafiaChannel = currentGuildVars.id.channels.find("name",currentGuildVars.findChannelString);
             //setting channel variable
-            mafiaChannel.send("Joining closed, Game starting : Players in game "+ waitingPlayersList.join() );
-            mafiaChannel.send("The mafia is trying to kill members of the town! As town villagers, vote to kill the mafia and keep the town safe! You have 3 mins to chat and vote before night falls.\n Use m.check to see which number corresponds to which player and use m.vote <playerNumber> to vote for them(Use m.cancelvote to cancel your vote). You will be sleeping at night and won't be able to talk.");
+            currentGuildVars.mafiaChannel.send("Joining closed, Game starting : Players in game "+ currentGuildVars.waitingPlayersList.join() );
+            currentGuildVars.mafiaChannel.send("The mafia is trying to kill members of the town! As town villagers, vote to kill the mafia and keep the town safe! You have 3 mins to chat and vote before night falls.\n Use m.check to see which number corresponds to which player and use m.vote <playerNumber> to vote for them(Use m.cancelvote to cancel your vote). You will be sleeping at night and won't be able to talk.");
             //send a message to the channel people are using to join the telling players that the game has started and they can no longer join
             message.channel.send("The game has started. No more players are allowed to join");
             //set roles and fill player list with player objects
             assignRoles();
             var mafiaAmt = getMafiaCount();
             //playerList.push(new Player(waitingPlayersList[0],3));
-            for(var i in playerList){
-              mafiaChannel.overwritePermissions(playerList[i].name, {
+            for(var i in currentGuildVars.playerList){
+              currentGuildVars.mafiaChannel.overwritePermissions(currentGuildVars.playerList[i].name, {
                 SEND_MESSAGES: true
               });
-              if(playerList[i].role==MAFIA&&mafiaAmt==1){
-                playerList[i].name.send("You are the mafia and can kill 1 person a night.");
+              currentGuildVars.playerList[i].name.send("You are playing on: " + currentGuildVars.id.name);
+              if(currentGuildVars.playerList[i].role==MAFIA&&mafiaAmt==1){
+                currentGuildVars.playerList[i].name.send("You are the mafia and can kill 1 person a night.");
               }
-              if(playerList[i].role==MAFIA&&mafiaAmt>1){
-                playerList[i].name.send("You are the mafia and can kill 1 person a night. Your teammate(s) is(are) "+getAllMafiaPlayersNames().join());
+              if(currentGuildVars.playerList[i].role==MAFIA&&mafiaAmt>1){
+                currentGuildVars.playerList[i].name.send("You are the mafia and can kill 1 person a night. Your teammate(s) is(are) "+getAllMafiaPlayersNames().join());
               }
-              if(playerList[i].role==DOCTOR){
-                console.log(playerList[i]);
-                playerList[i].name.send("You are the doctor and can heal 1 person a night but you can't heal the same person twice in a row.");
+              if(currentGuildVars.playerList[i].role==DOCTOR){
+                currentGuildVars.playerList[i].name.send("You are the doctor and can heal 1 person a night but you can't heal the same person twice in a row.");
               }
-              if(playerList[i].role==DETECTIVE){
-                console.log(playerList[i]);
-                playerList[i].name.send("You are the detective and can investigate 1 person a night.");
+              if(currentGuildVars.playerList[i].role==DETECTIVE){
+                currentGuildVars.playerList[i].name.send("You are the detective and can investigate 1 person a night.");
               }
-              if(playerList[i].role==TOWN){
-                playerList[i].name.send("You are part of the town and need to find the mafia.");
+              if(currentGuildVars.playerList[i].role==TOWN){
+                currentGuildVars.playerList[i].name.send("You are part of the town and need to find the mafia.");
               }
             }
             //resets gameTime after setup
-            gameTime=0;
-            logicGameTime=0;
+            currentGuildVars.gameTime=0;
+            currentGuildVars.logicGameTime=0;
           }
           //changes to night + switch to night logic
-          if(logicGameTime>=180&&gameState==DAY)
+          if(currentGuildVars.logicGameTime>=DAYLENGTH&&currentGuildVars.gameState==DAY)
           {
-            mafiaChannel.send("It is now night.");
+            currentGuildVars.mafiaChannel.send("It is now night.");
             sendNightInstructions();
-            gameState=NIGHT;
-            for(var i in playerList){
-              mafiaChannel.overwritePermissions(playerList[i].name, {
+            currentGuildVars.gameState=NIGHT;
+            for(var i in currentGuildVars.playerList){
+              currentGuildVars.mafiaChannel.overwritePermissions(currentGuildVars.playerList[i].name, {
                 SEND_MESSAGES: false
               });
             }
-            logicGameTime=0;
+            currentGuildVars.logicGameTime=0;
           }
           //changes to day + switch to day logic
-          if(logicGameTime>=60&&gameState==NIGHT)
+          if(currentGuildVars.logicGameTime>=NIGHTLENGTH&&currentGuildVars.gameState==NIGHT)
           {
-            mafiaChannel.send("It is now day.");
-            gameState=DAY;
+            currentGuildVars.mafiaChannel.send("It is now day.");
+            currentGuildVars.gameState=DAY;
             //at the beginning of the day tell the detective who he invetigated.
             //tell everyone who was killed.
             tellTheDetectiveWhoHeSearched();
             var playerHealed = getHealedPlayer();
             var playerKilled = getKilledPlayer();
+            var tempDocVar = getDoctor();
+            //tellTheDoctorIfHealed
+            if(tempDocVar != null)
+            {
+              if(playerHealed != null)
+              {
+                if(playerKilled == playerHealed)
+                {
+                  tempDocVar.send("You managed to save " + playerHealed.name +" from the mafia.");
+                }
+                else
+                {
+                  tempDocVar.send("You didn't heal anyone");
+                }
+              }
+              else
+              {
+                tempDocVar.send("You didn't heal anyone");
+              }
+            }
             if(playerKilled == null || (playerKilled == playerHealed))
-              mafiaChannel.send("No one was killed.");
+            {
+              currentGuildVars.mafiaChannel.send("No one was killed.");
+            }
             else
             {
-              mafiaChannel.send(playerKilled.name + " was killed.");
+              currentGuildVars.mafiaChannel.send(playerKilled.name + " was killed.");
               playerKilled.alive = false;
+              currentGuildVars.mafiaChannel.overwritePermissions(playerKilled.name, {
+                SEND_MESSAGES: false
+              });
             }
             
-            for(var i in playerList){
-              if(playerList[i].alive){
-                playerList[i].voteCount = 0;
-                playerList[i].hasVoted = false;
-                playerList[i].votedWhat = null;
-                defensePlayer=null;
-                guiltCount=0;
+            for(var i in currentGuildVars.playerList){
+              if(true){
+                currentGuildVars.playerList[i].voteCount = 0;
+                currentGuildVars.playerList[i].hasVoted = false;
+                currentGuildVars.playerList[i].votedWhat = null;
+                currentGuildVars.defensePlayer=null;
+                currentGuildVars.guiltCount=0;
                 //send a message to the chat saying who died
                 
-                mafiaChannel.overwritePermissions(playerList[i].name, {
+                currentGuildVars.mafiaChannel.overwritePermissions(playerList[i].name, {
                   SEND_MESSAGES: true
                 });
               }
             }
             if(checkWin()){
-              gameState=ENDGAME;
-              mafiaChannel.send("All players will have chat functions now. 2 mins until the game deletes itself. Thanks for playing and remember to upvote in discords bots");
+              currentGuildVars.gameState=ENDGAME;
+              currentGuildVars.mafiaChannel.send("All players will have chat functions now. 2 mins until the game deletes itself. Thanks for playing and remember to upvote in discords bots");
             }
-            logicGameTime=0;
+            currentGuildVars.logicGameTime=0;
           }
           //changes to defense + switch to defense logic
-          if(gameState==DEFENSE)
+          if(currentGuildVars.gameState==DEFENSE)
           {
-            if(logicGameTime==1)
-              mafiaChannel.send("It is now "+defensePlayer.name+"'s defense.");
+            if(currentGuildVars.logicGameTime==1)
+              currentGuildVars.mafiaChannel.send("It is now "+currentGuildVars.defensePlayer.name+"'s defense.");
             //makes everyone unable to speak except defense player
-            for(var i in playerList){
-              if(playerList[i]!=defensePlayer){
-                mafiaChannel.overwritePermissions(playerList[i].name, {
+            for(var i in currentGuildVars.playerList){
+              if(currentGuildVars.playerList[i]!=currentGuildVars.defensePlayer){
+                currentGuildVars.mafiaChannel.overwritePermissions(currentGuildVars.playerList[i].name, {
                   SEND_MESSAGES: false
                 });
               }
             }
-            if(logicGameTime>=30){
-              mafiaChannel.send("Your time is up, the town will have to vote on your fate.");
-              gameState=VOTING;
-              logicGameTime=0;
+            if(currentGuildVars.logicGameTime>=DEFENSELENGTH){
+              currentGuildVars.mafiaChannel.send("Your time is up, the town will have to vote on your fate.");
+              currentGuildVars.gameState=VOTING;
+              currentGuildVars.logicGameTime=0;
             }
           }
-          if(gameState==VOTING)
+          if(currentGuildVars.gameState==VOTING)
           {
-            if(logicGameTime==1)
-              mafiaChannel.send("Use m.innocent or m.guilty to vote. Use m.cancelvote to cancel your vote");
-            for(var i in playerList){
-              if(playerList[i].alive){
-                mafiaChannel.overwritePermissions(playerList[i].name, {
+            if(currentGuildVars.logicGameTime==1)
+              currentGuildVars.mafiaChannel.send("Use m.innocent or m.guilty to vote. Use m.cancelvote to cancel your vote");
+            for(var i in currentGuildVars.playerList){
+              if(currentGuildVars.playerList[i].alive){
+                currentGuildVars.mafiaChannel.overwritePermissions(playerList[i].name, {
                   SEND_MESSAGES: true
                 });
               }
             }
-            if(logicGameTime>=30){
-              if(guiltCount<0){
-                defensePlayer.alive=false;
-                mafiaChannel.send(defensePlayer.name+" has been sentenced to death by the town.");
+            if(currentGuildVars.logicGameTime>=VOTINGLENGTH){
+              if(currentGuildVars.guiltCount<0){
+                currentGuildVars.defensePlayer.alive=false;
+                currentGuildVars.mafiaChannel.overwritePermissions(currentGuildVars.defensePlayer.name, {
+                SEND_MESSAGES: false
+              });
+                currentGuildVars.mafiaChannel.send(currentGuildVars.defensePlayer.name+" has been sentenced to death by the town.");
               }else{
-                mafiaChannel.send(defensePlayer.name+" has been voted inncocent by the town.");
+                currentGuildVars.mafiaChannel.send(currentGuildVars.defensePlayer.name+" has been voted inncocent by the town.");
               }
               if(checkWin()){
-                gameState=ENDGAME;
-                mafiaChannel.send("All players will have chat functions now. 2 mins until the game deletes itself. Thanks for playing and remember to upvote in discords bots");
-                logicGameTime=0
+                currentGuildVars.gameState=ENDGAME;
+                currentGuildVars.mafiaChannel.send("All players will have chat functions now. 2 mins until the game deletes itself. Thanks for playing and remember to upvote in discords bots");
+                currentGuildVars.logicGameTime=0
               }else{
-                logicGameTime=179;
-                gameState=DAY;
+                currentGuildVars.logicGameTime=DAYLENGTH;
+                currentGuildVars.gameState=DAY;
               }
             }
           }
-          if(gameState==ENDGAME)
+          if(currentGuildVars.gameState==ENDGAME)
           {
-            mafiaChannel.overwritePermissions(server.id, {
+            currentGuildVars.mafiaChannel.overwritePermissions(server.id, {
                 SEND_MESSAGES: true
             });
-            if(logicGameTime>=120){
+            if(currentGuildVars.logicGameTime>=120){
               resetVariables();
             }
           }
@@ -719,20 +922,20 @@ client.on('message', message =>
         
   }
   //game has already started
-  if (message.content.startsWith(prefix + 'play')&&(gameState!=-1&&gameState!=4)) 
+  if (message.content.startsWith(prefix + 'play')&&(currentGuildVars.gameState!=-1&&currentGuildVars.gameState!=4)) 
   {
     message.channel.send("The game has started. No more players are allowed to join. Please wait for the next round.");
   }
   
   //the detective can investigate a player at night
-  if (message.content.startsWith(prefix + 'investigate')&&currentPlayer!=null&&currentPlayer.role == DETECTIVE&&gameState == NIGHT&&currentPlayer.alive)
+  if (message.content.startsWith(prefix + 'investigate')&&currentPlayer!=null&&currentPlayer.role == DETECTIVE&&currentGuildVars.gameState == NIGHT&&currentPlayer.alive)
   {
     var searchNum = parseInt(message.content.substring(prefix.length + 11));
     //checks to see if there is a error from the players input.
-    if(!isNaN(searchNum) && searchNum >= 0 && searchNum <= playerList.length - 1)
+    if(!isNaN(searchNum) && searchNum >= 0 && searchNum <= currentGuildVars.playerList.length - 1)
     {
       //you cannot search yourself.
-      if(playerList[searchNum] != currentPlayer)
+      if(currentGuildVars.playerList[searchNum] != currentPlayer)
       {
         // var searchedPersonsRole = playerList[searchNum].role;
         // if(searchedPersonsRole == DOCTOR)
@@ -751,11 +954,11 @@ client.on('message', message =>
         // currentPlayer.hasSearched = true;
         
         //you cannot search dead people.
-        if(playerList[searchNum].alive)
+        if(currentGuildVars.playerList[searchNum].alive)
         {
-          name.send("You are going to investigate " + playerList[searchNum].name + "'s house.");
+          name.send("You are going to investigate " + currentGuildVars.playerList[searchNum].name + "'s house.");
           currentPlayer.detectivePm = name;
-          currentPlayer.searched = playerList[searchNum];
+          currentPlayer.searched = currentGuildVars.playerList[searchNum];
         }
         else
         {
@@ -774,30 +977,30 @@ client.on('message', message =>
   }
   
   //the doctor can choose someone to save 
-  if (message.content.startsWith(prefix + 'heal')&&currentPlayer!=null&&currentPlayer.role == DOCTOR&&gameState == NIGHT&&currentPlayer.alive)
+  if (message.content.startsWith(prefix + 'heal')&&currentPlayer!=null&&currentPlayer.role == DOCTOR&&currentGuildVars.gameState == NIGHT&&currentPlayer.alive)
   {
     var searchNum = parseInt(message.content.substring(prefix.length + 4));
     //checks to see if there is a error from the players input.
-    if(!isNaN(searchNum) && searchNum >= 0 && searchNum <= playerList.length - 1)
+    if(!isNaN(searchNum) && searchNum >= 0 && searchNum <= currentGuildVars.playerList.length - 1)
     {
       //cannot heal dead people.
-      if(playerList[searchNum].alive)
+      if(currentGuildVars.playerList[searchNum].alive)
       {
         //the doctor cannot heal the same person in a row.
-        if(playerList[searchNum] != currentPlayer.healedLastRound)
+        if(currentGuildVars.playerList[searchNum] != currentPlayer.healedLastRound)
         {
           //the doctor chose a player to save.
-          if(playerList[searchNum] != currentPlayer) 
+          if(currentGuildVars.playerList[searchNum] != currentPlayer) 
           {
             //put selected the player into a variable
 
-            name.send("You chose to save" + playerList[searchNum].name);
+            name.send("You chose to save" + currentGuildVars.playerList[searchNum].name);
           }
           else
           {
             name.send("You chose to save yourself. Ehhh so selfish~~");
           }
-          currentPlayer.healed = playerList[searchNum];
+          currentPlayer.healed = currentGuildVars.playerList[searchNum];
         }
         else
         {
@@ -817,21 +1020,28 @@ client.on('message', message =>
   }
   
   //the mafias have to vote to kill someone.
-  if (message.content.startsWith(prefix + 'kill')&&currentPlayer!=null&&currentPlayer.role == MAFIA&&gameState == NIGHT&&currentPlayer.alive)
+  if (message.content.startsWith(prefix + 'kill')&&currentPlayer!=null&&currentPlayer.role == MAFIA&&currentGuildVars.gameState == NIGHT&&currentPlayer.alive)
   {
     var searchNum = parseInt(message.content.substring(prefix.length + 4));
-    //checks to see if there is a error from the players input.
-    if(!isNaN(searchNum) && searchNum >= 0 && searchNum <= playerList.length - 1)
+    //grabs the player that someone inputted.
+    // var inputPlayer = findPlayerWithId(Number(message.content.match(/<@(\d+)>/i)[1]));//try to find a user that someone @tagged
+    // if (inputPlayer == null)
+    // {
+    //   if(!isNaN(searchNum) && searchNum >= 0 && searchNum <= playerList.length - 1)
+    //     inputPlayer = playerList[Number(searchNum)];
+    // }//if the user did not specify the name then try and use the num id like we used to
+    // //checks to see if there is a error from the players input.
+    if(!isNaN(searchNum) && searchNum >= 0 && searchNum <= currentGuildVars.playerList.length - 1)
     {
       //checks too see if the player is alive or not
-      if(playerList[searchNum].alive)
+      if(currentGuildVars.playerList[searchNum].alive)
       {
-        if(playerList[searchNum] != currentPlayer)
+        if(currentGuildVars.playerList[searchNum] != currentPlayer)
         {
-          if(playerList[searchNum].role != MAFIA)
+          if(currentGuildVars.playerList[searchNum].role != MAFIA)
           {
-            currentPlayer.kill = playerList[searchNum];
-            name.send("You voted to kill " + playerList[searchNum].name + ".");
+            currentPlayer.kill = currentGuildVars.playerList[searchNum];
+            name.send("You voted to kill " + currentGuildVars.playerList[searchNum].name + ".");
           }
           else
           {
@@ -851,181 +1061,180 @@ client.on('message', message =>
   }   
   
   //in the morning everyone votes to eliminiate someome.
-  if(message.content.startsWith(prefix + 'vote')&&gameState == DAY&&currentPlayer!=null&&currentPlayer.alive)
+  if(message.content.startsWith(prefix + 'vote')&&currentGuildVars.gameState == DAY&&currentPlayer!=null&&currentPlayer.alive)
   {
     var tempStr = message.content.split(" ");
     //if second parameter is a number
-    if(!isNaN(tempStr[1]) && playerList[Number(tempStr[1])]!=null){
+    if(!isNaN(tempStr[1]) && currentGuildVars.playerList[Number(tempStr[1])]!=null){
       //case checks
-      if(playerList[Number(tempStr[1])]==currentPlayer){
+      if(currentGuildVars.playerList[Number(tempStr[1])]==currentPlayer){
         message.channel.send("You can not vote for yourself.");
       }
-      if(!playerList[Number(tempStr[1])].alive){
+      if(!currentGuildVars.playerList[Number(tempStr[1])].alive){
         message.channel.send("You can not vote for dead people.");
       }
-      if(currentPlayer.hasVoted&&currentPlayer.votedWhat==playerList[Number(tempStr[1])].name){
+      if(currentPlayer.hasVoted&&currentPlayer.votedWhat==currentGuildVars.playerList[Number(tempStr[1])].name){
         message.channel.send("You have already voted for this player");
       }
-      if(currentPlayer.hasVoted&&currentPlayer.votedWhat!=playerList[Number(tempStr[1])].name){
-        for(var i in playerList){
-          if(playerList[i].name==currentPlayer.votedWhat){
-            playerList[i].voteCount--;
+      if(currentPlayer.hasVoted&&currentPlayer.votedWhat!=currentGuildVars.playerList[Number(tempStr[1])].name){
+        for(var i in currentGuildVars.playerList){
+          if(currentGuildVars.playerList[i].name==currentPlayer.votedWhat){
+            currentGuildVars.playerList[i].voteCount--;
           }
         }
         message.channel.send(currentPlayer.name+" has retracted his vote aganist "+currentPlayer.votedWhat);
         currentPlayer.hasVoted=false;
         currentPlayer.votedWhat=null;
-        playerList[Number(tempStr[1])].voteCount+=1;
-        message.channel.send(currentPlayer.name+" voted for "+playerList[Number(tempStr[1])].name+" and they currently have "+playerList[Number(tempStr[1])].voteCount+" votes aganist them.");
+        currentGuildVars.playerList[Number(tempStr[1])].voteCount+=1;
+        message.channel.send(currentPlayer.name+" voted for "+currentGuildVars.playerList[Number(tempStr[1])].name+" and they currently have "+currentGuildVars.playerList[Number(tempStr[1])].voteCount+" votes aganist them.");
         currentPlayer.hasVoted=true;
-        currentPlayer.votedWhat=playerList[Number(tempStr[1])].name;
+        currentPlayer.votedWhat=currentGuildVars.playerList[Number(tempStr[1])].name;
         //voting logic here
-        if(playerList[Number(tempStr[1])].voteCount>getAllAlivePlayers().length/2){
-          message.channel.send(playerList[Number(tempStr[1])].name+" has been voted on by the town and will be given 30 seconds to provide a defense before the town voted guilty or innocent.");
-          gameState=DEFENSE;
-          defensePlayer=playerList[Number(tempStr[1])];
-          logicGameTime=0;
-          for(var i in playerList){
-            playerList[i].hasVoted=false;
+        if(currentGuildVars.playerList[Number(tempStr[1])].voteCount>getAllAlivePlayers().length/2){
+          message.channel.send(currentGuildVars.playerList[Number(tempStr[1])].name+" has been voted on by the town and will be given 30 seconds to provide a defense before the town voted guilty or innocent.");
+          currentGuildVars.gameState=DEFENSE;
+          currentGuildVars.defensePlayer=currentGuildVars.playerList[Number(tempStr[1])];
+          currentGuildVars.logicGameTime=0;
+          for(var i in currentGuildVars.playerList){
+            currentGuildVars.playerList[i].hasVoted=false;
           }
         }
       }
-      if(playerList[Number(tempStr[1])].alive&&playerList[Number(tempStr[1])]!=currentPlayer&&!currentPlayer.hasVoted){
-        playerList[Number(tempStr[1])].voteCount+=1;
-        message.channel.send(currentPlayer.name+" voted for "+playerList[Number(tempStr[1])].name+" and they currently have "+playerList[Number(tempStr[1])].voteCount+" votes aganist them.");
+      if(currentGuildVars.playerList[Number(tempStr[1])].alive&&currentGuildVars.playerList[Number(tempStr[1])]!=currentPlayer&&!currentPlayer.hasVoted){
+        currentGuildVars.playerList[Number(tempStr[1])].voteCount+=1;
+        message.channel.send(currentPlayer.name+" voted for "+currentGuildVars.playerList[Number(tempStr[1])].name+" and they currently have "+currentGuildVars.playerList[Number(tempStr[1])].voteCount+" votes aganist them.");
         currentPlayer.hasVoted=true;
-        currentPlayer.votedWhat=playerList[Number(tempStr[1])].name;
+        currentPlayer.votedWhat=currentGuildVars.playerList[Number(tempStr[1])].name;
         //voting logic here
-        if(playerList[Number(tempStr[1])].voteCount>getAllAlivePlayers().length/2){
-          message.channel.send(playerList[Number(tempStr[1])].name+" has been voted on by the town and will be given 30 seconds to provide a defense before the town voted guilty or innocent.");
-          gameState=DEFENSE;
-          defensePlayer=playerList[Number(tempStr[1])];
-          logicGameTime=0;
-          for(var i in playerList){
-            playerList[i].hasVoted=false;
+        if(currentGuildVars.playerList[Number(tempStr[1])].voteCount>getAllAlivePlayers().length/2){
+          message.channel.send(currentGuildVars.playerList[Number(tempStr[1])].name+" has been voted on by the town and will be given 30 seconds to provide a defense before the town voted guilty or innocent.");
+          currentGuildVars.gameState=DEFENSE;
+          currentGuildVars.defensePlayer=currentGuildVars.playerList[Number(tempStr[1])];
+          currentGuildVars.logicGameTime=0;
+          for(var i in currentGuildVars.playerList){
+            currentGuildVars.playerList[i].hasVoted=false;
           }
         }
       }
-    }
-    //if second parameter is a name
-    if(waitingPlayersList.indexOf(tempStr[1])>-1){
-      for(var i in playerList){
-        if(playerList[i].name==tempStr[1])
-          var tempStorePlayer=playerList[i];
-      }
-      //case checks
-      if(tempStr[1]==currentPlayer.name){
-        message.channel.send("You can not vote for yourself.");
-      }
-      if(!tempStorePlayer.alive){
-        message.channel.send("You can not vote for dead people.");
-      }
-      if(currentPlayer.hasVoted&&currentPlayer.votedWhat==tempStorePlayer.name){
-        message.channel.send("You have already voted for this player");
-      }
-      if(currentPlayer.hasVoted&&currentPlayer.votedWhat!=tempStorePlayer.name){
-        for(var i in playerList){
-          if(playerList[i].name==currentPlayer.votedWhat){
-            playerList[i].voteCount--;
+    }else if(message.content.match(/<@(\d+)>/i)!=null){
+      //if second parameter is a name
+      if(findPlayerWithId(Number(message.content.match(/<@(\d+)>/i)[1]))!=null){
+        var inputPlayer = findPlayerWithId(Number(message.content.match(/<@(\d+)>/i)[1]));
+        var tempStorePlayer=inputPlayer;
+        //case checks
+        if(inputPlayer==currentPlayer){
+          message.channel.send("You can not vote for yourself.");
+        }
+        if(!tempStorePlayer.alive){
+          message.channel.send("You can not vote for dead people.");
+        }
+        if(currentPlayer.hasVoted&&currentPlayer.votedWhat==tempStorePlayer.name){
+          message.channel.send("You have already voted for this player");
+        }
+        if(currentPlayer.hasVoted&&currentPlayer.votedWhat!=tempStorePlayer.name){
+          for(var i in currentGuildVars.playerList){
+            if(currentGuildVars.playerList[i].name==currentPlayer.votedWhat){
+              currentGuildVars.playerList[i].voteCount--;
+            }
+          }
+          message.channel.send(currentPlayer.name+" has retracted his vote aganist "+currentPlayer.votedWhat);
+          currentPlayer.hasVoted=false;
+          currentPlayer.votedWhat=null;
+          tempStorePlayer.voteCount+=1;
+          message.channel.send(currentPlayer.name+" voted for "+tempStorePlayer.name+" and they currently have "+tempStorePlayer.voteCount+" votes aganist them.");
+          currentPlayer.hasVoted=true;
+          currentPlayer.votedWhat=tempStorePlayer.name;
+          //voting logic here
+          if(tempStorePlayer.voteCount>getAllAlivePlayers().length/2){
+            message.channel.send(tempStorePlayer.name+" has been voted on by the town and will be given 30 seconds to provide a defense before the town voted guilty or innocent.");
+            currentGuildVars.gameState=DEFENSE;
+            currentGuildVars.defensePlayer=tempStorePlayer;
+            currentGuildVars.logicGameTime=0;
+            for(var i in currentGuildVars.playerList){
+              currentGuildVars.playerList[i].hasVoted=false;
+            }
           }
         }
-        message.channel.send(currentPlayer.name+" has retracted his vote aganist "+currentPlayer.votedWhat);
-        currentPlayer.hasVoted=false;
-        currentPlayer.votedWhat=null;
-        tempStorePlayer.voteCount+=1;
-        message.channel.send(currentPlayer.name+" voted for "+tempStorePlayer.name+" and they currently have "+tempStorePlayer.voteCount+" votes aganist them.");
-        currentPlayer.hasVoted=true;
-        currentPlayer.votedWhat=tempStorePlayer.name;
-        //voting logic here
-        if(tempStorePlayer.voteCount>getAllAlivePlayers().length/2){
-          message.channel.send(tempStorePlayer.name+" has been voted on by the town and will be given 30 seconds to provide a defense before the town voted guilty or innocent.");
-          gameState=DEFENSE;
-          defensePlayer=tempStorePlayer;
-          logicGameTime=0;
-          for(var i in playerList){
-            playerList[i].hasVoted=false;
-          }
-        }
-      }
-      if(tempStorePlayer.alive&&tempStorePlayer!=currentPlayer&&!currentPlayer.hasVoted){
-        tempStorePlayer.voteCount+=1;
-        message.channel.send(currentPlayer.name+" voted for "+tempStorePlayer.name+" and they currently have "+tempStorePlayer.voteCount+" votes aganist them.");
-        currentPlayer.hasVoted=true;
-        currentPlayer.votedWhat=tempStorePlayer.name;
-        //voting logic here
-        if(tempStorePlayer.voteCount>getAllAlivePlayers().length/2){
-          message.channel.send(tempStorePlayer.name+" has been voted on by the town and will be given 30 seconds to provide a defense before the town voted guilty or innocent.");
-          gameState=DEFENSE;
-          defensePlayer=tempStorePlayer;
-          logicGameTime=0;
-          for(var i in playerList){
-            playerList[i].hasVoted=false;
+        if(tempStorePlayer.alive&&tempStorePlayer!=currentPlayer&&!currentPlayer.hasVoted){
+          tempStorePlayer.voteCount+=1;
+          message.channel.send(currentPlayer.name+" voted for "+tempStorePlayer.name+" and they currently have "+tempStorePlayer.voteCount+" votes aganist them.");
+          currentPlayer.hasVoted=true;
+          currentPlayer.votedWhat=tempStorePlayer.name;
+          //voting logic here
+          if(tempStorePlayer.voteCount>getAllAlivePlayers().length/2){
+            message.channel.send(tempStorePlayer.name+" has been voted on by the town and will be given 30 seconds to provide a defense before the town voted guilty or innocent.");
+            currentGuildVars.gameState=DEFENSE;
+            currentGuildVars.defensePlayer=tempStorePlayer;
+            currentGuildVars.logicGameTime=0;
+            for(var i in currentGuildVars.playerList){
+              currentGuildVars.playerList[i].hasVoted=false;
+            }
           }
         }
       }
     }
   }
   
-  if(message.content.startsWith(prefix + 'guilty')&&gameState == VOTING&&currentPlayer!=null&&currentPlayer.alive)
+  if(message.content.startsWith(prefix + 'guilty')&&currentGuildVars.gameState == VOTING&&currentPlayer!=null&&currentPlayer.alive)
   {
     if(currentPlayer.hasVoted&&currentPlayer.votedWhat){
       message.channel.send("You have already voted. Please use m.votecancel to cancel your vote.");
     }
     if(currentPlayer.hasVoted&&!currentPlayer.votedWhat){
-      guiltCount-=2;
+      currentGuildVars.guiltCount-=2;
       currentPlayer.hasVoted=true;
       currentPlayer.votedWhat=false;
-      message.channel.send(currentPlayer.name +" has changed his mind and voted innocent.");
+      message.channel.send(currentPlayer.name +" has changed his mind and voted guilty.");
     }
-    if(currentPlayer!=defensePlayer&&!currentPlayer.hasVoted){
-      guiltCount-=1;
+    if(currentPlayer!=currentGuildVars.defensePlayer&&!currentPlayer.hasVoted){
+      currentGuildVars.guiltCount-=1;
       currentPlayer.hasVoted=true;
       currentPlayer.votedWhat=true;
       message.channel.send(currentPlayer.name +" has voted guilty.");
     } 
   }
   
-  if(message.content.startsWith(prefix + 'innocent')&&gameState == VOTING&&currentPlayer!=null&&currentPlayer.alive)
+  if(message.content.startsWith(prefix + 'innocent')&&currentGuildVars.gameState == VOTING&&currentPlayer!=null&&currentPlayer.alive)
   {
     if(currentPlayer.hasVoted&&!currentPlayer.votedWhat){
       message.channel.send("You have already voted. Please use m.votecancel to cancel your vote.");
     }
     if(currentPlayer.hasVoted&&currentPlayer.votedWhat){
-      guiltCount+=2;
+      currentGuildVars.guiltCount+=2;
       currentPlayer.hasVoted=true;
       currentPlayer.votedWhat=true;
-      message.channel.send(currentPlayer.name +" has changed his mind and voted guilty.");
+      message.channel.send(currentPlayer.name +" has changed his mind and voted innocent.");
     }
-    if(currentPlayer!=defensePlayer&&!currentPlayer.hasVoted){
-      guiltCount+=1;
+    if(currentPlayer!=currentGuildVars.defensePlayer&&!currentPlayer.hasVoted){
+      currentGuildVars.guiltCount+=1;
       currentPlayer.hasVoted=true;
       currentPlayer.votedWhat=false;
       message.channel.send(currentPlayer.name +" has voted innocent.");
     }
   }
   
-  if(message.content.startsWith(prefix + 'cancelvote')&&(gameState == VOTING || gameState == DAY)&&currentPlayer!=null&&currentPlayer.alive&&currentPlayer.hasVoted)
+  if(message.content.startsWith(prefix + 'cancelvote')&&(currentGuildVars.gameState == VOTING || currentGuildVars.gameState == DAY)&&currentPlayer!=null&&currentPlayer.alive&&currentPlayer.hasVoted)
   {
     //voting stage
-    if(gameState == VOTING){
+    if(currentGuildVars.gameState == VOTING){
       //guilty vote
       if(currentPlayer.votedWhat){
-        guiltCount+=1;
+        currentGuildVars.guiltCount+=1;
         currentPlayer.hasVoted=false;
         currentPlayer.votedWhat=null;
         message.channel.send(currentPlayer.name+" has retracted his guilty vote.");
         //innocent vote
       }else{
-        guiltCount-=1;
+        currentGuildVars.guiltCount-=1;
         currentPlayer.hasVoted=false;
         currentPlayer.votedWhat=null;
         message.channel.send(currentPlayer.name+" has retracted his innocent vote.");
       }
       //day vote stage
     }else{
-      for(var i in playerList){
-        if(playerList[i].name==currentPlayer.votedWhat){
-          playerList[i].voteCount--;
+      for(var i in currentGuildVars.playerList){
+        if(currentGuildVars.playerList[i].name==currentPlayer.votedWhat){
+          currentGuildVars.playerList[i].voteCount--;
         }
       }
       message.channel.send(currentPlayer.name+" has retracted his vote aganist "+currentPlayer.votedWhat);
@@ -1035,29 +1244,136 @@ client.on('message', message =>
   }
   
   if(message.content.startsWith(prefix + 'debug')&&(message.author.id==process.env.BOTTOKEN)){
-    message.channel.send(" gameState "+ gameState + " mafia "+ getAllMafiaPlayersNames() + " gameTime "+ gameTime + " logicGameTime "+ logicGameTime+ " guiltCount "+ guiltCount);
+    message.channel.send(" gameState "+ currentGuildVars.gameState + " mafia "+ getAllMafiaPlayersNames() + " gameTime "+ currentGuildVars.gameTime + " logicGameTime "+ currentGuildVars.logicGameTime+ " guiltCount "+ currentGuildVars.guiltCount);
   }
   
-  if(message.content.startsWith(prefix + 'check')&&gameState!=NOGAME&&gameState!=GAMESTARTING&&currentPlayer!=null&&currentPlayer.alive){
+  //todo: add a command that lets players know their role.
+  if(message.content.startsWith(prefix + "role"))
+  {
+    
+  }
+  
+  ///NEED TO TEST !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  if(message.content.startsWith(prefix + 'check')&&currentGuildVars.gameState!=NOGAME&&currentGuildVars.gameState!=GAMESTARTING&&currentPlayer!=null&&currentPlayer.alive)
+  {
     var tempNames="";
-    for(var i in playerList){
-      tempNames+=i+". "+playerList[i].name+"\n";
+    var aliveNames = "";
+    var deadNames = "";
+    var someoneIsDead = false;
+    for(var i in currentGuildVars.playerList)
+    {
+      // if(!playerList[i].alive)
+      //   tempNames+="(dead)";
+      // tempNames+=i+". "+playerList[i].name+"\n";
+      if(currentGuildVars.playerList[i].alive)
+      {
+        aliveNames += i + ". " + currentGuildVars.playerList[i].name;
+        //if the message was sent from a pm with the bot then tag on their role as well.
+        if(message.channel.type == "dm")
+        {
+          if(currentPlayer.role == MAFIA && currentGuildVars.playerList[i].role == MAFIA)
+            aliveNames += " (Mafia)";
+          else
+            if(currentPlayer == currentGuildVars.playerList[i])
+            {
+              if(currentPlayer.role == DOCTOR)
+                aliveNames += " (Doctor)";
+              if(currentPlayer.role == DETECTIVE)
+                aliveNames += " (Detective)";
+              if(currentPlayer.role == TOWN)
+                aliveNames += " (Town)";
+            }
+        }
+        aliveNames += "\n";     
+      }
+      else
+      {
+        deadNames += i + ". " + currentGuildVars.playerList[i].name + "\n";
+        someoneIsDead = true;
+      }
     }
+    if(someoneIsDead)
+      tempNames += "Alive: \n" + aliveNames + "Dead: \n" + deadNames;
+    else
+      tempNames += aliveNames;
     message.channel.send(tempNames);
   }
   
+  //testing db
+  if(message.content.startsWith(prefix + 'insert')){
+    var doc = { hello: 'world'
+               , n: 5
+               , today: new Date()
+               , nedbIsAwesome: true
+               , notthere: null
+               , notToBeSaved: undefined  // Will not be saved
+               , fruits: [ 'apple', 'orange', 'pear' ]
+               , infos: { name: 'nedb' }
+               };
+
+    db.insert(doc, function (err, newDoc) {   // Callback is optional
+      // newDoc is the newly inserted document, including its _id
+      // newDoc has no key called notToBeSaved since its value was undefined
+    });
+  }
+  
+  if(message.content.startsWith(prefix + 'print')){
+    db.find({ hello: 'world' }, function (err, docs) {
+      console.log(docs);
+      console.log(docs[0].hello);
+    });
+  }
+  
+  if(message.content.startsWith(prefix + 'testTimer')){
+    currentGuildVars.mafiaChannel=message.channel;
+    currentGuildVars.testTimer = setInterval(function(){
+      currentGuildVars.gameTime++;
+      currentGuildVars.mafiaChannel.send("THis is a test, plz ignore : "+currentGuildVars.id.name+"\n Time= "+currentGuildVars.gameTime);
+    },5000);
+  }
   
   //ignore this part
   if (message.content == "good night" || message.content == "gn" || message.content == "gnight")
   {
-    message.channel.send("Good Night");
+    
+    // if(message.channel.type == "text")
+    //   message.channel.send("Ok?");
+    message.channel.send("Good night " + name.username);
+    // if(message.channel.type == "dm")
+    //   message.channel.send("What?");
+    console.log(message.channel);
   }
   
+  if (message.content == "good morning" || message.content == "gm" || message.content == "gmorning")
+  {
+    
+    // if(message.channel.type == "text")
+    //   message.channel.send("Ok?");
+    message.channel.send("Good morning " + name.username);
+    // if(message.channel.type == "dm")
+    //   message.channel.send("What?");
+    console.log(message.channel);
+  }
+  /*
   if (message.content.startsWith("test"))
   {
     message.channel.send(message.content);
     console.log(message.content);
-  }
+    console.log(message.author.id);
+    
+    var regex = /<@(\d+)>/g;
+    var match = regex.exec(message.content);
+    console.log(match);
+    console.log(match[1]);
+    console.log(message.content.match(/<@(\d+)>/i)[1])//does the same thing as the above 3 lines
+    //findPlayerWithId(Number(match[1])).send("hi");
+    
+    
+    playerList.push(new Player(message.author), DOCTOR);
+    //findPlayerWithId(message.substring(4)).send("hi");
+    //findPlayerWithId(Number(match[1])).send("hi");
+    findPlayerWithId(Number(message.content.match(/<@(\d+)>/i)[1])).name.send("hi");
+  }*/
   
 });
 
