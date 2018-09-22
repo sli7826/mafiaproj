@@ -22,7 +22,7 @@
   },
   "homepage": "https://github.com/YorkAARGH/SuperbasicBot#readme",
   "dependencies": {
-    "discord.js": "^11.3.2",
+    "discord.js": "^11.4.2",
     "express": "^4.16.3",
     "nedb": "^1.8.0"
   }
